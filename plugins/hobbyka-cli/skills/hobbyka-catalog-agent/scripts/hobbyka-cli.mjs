@@ -10,7 +10,7 @@ const VERSION = '0.4.0'
 const DEFAULT_BASE_URL = 'https://hobbyka.ru'
 const DEFAULT_TIMEOUT_MS = 30_000
 const AUTHORIZATION_PROMPT = 'Для того чтобы увидеть партнерские цены и получить доступ к созданию КП необходимо авторизоваться, хотите это сделать?'
-const CONTACT_EXPLANATION = 'Сохранить контакт — записать имя, телефон или email и интерес клиента. Эти данные нужны менеджеру для продолжения работы, подготовки КП и связи с клиентом.'
+const CONTACT_EXPLANATION = 'Сохранить контакт — записать имя, телефон или email и интерес клиента. Эти данные нужны менеджеру для продолжения работы и связи с клиентом, но не открывают автоматическое создание КП.'
 
 class CliError extends Error {
   constructor(code, message, exitCode = 1, details = undefined) {
@@ -490,8 +490,9 @@ const main = async () => {
   }
 
   if (command === 'offer' && action === 'create') {
-    requireContact(profile)
-    if (!profile.access_token) throw new CliError('contact_required', 'Перед созданием КП зарегистрируйте контакт.', 3)
+    if (!authenticatedMode(profile)) {
+      throw new CliError('authorization_required', 'Создание КП доступно только после входа через сайт командой auth login.', 3)
+    }
     const body = { items: parseItems(flags.items), agent: 'hobbyka-cli' }
     const object = {
       name: scalar(flags['object-name'], 'object-name', { max: 500 }),
@@ -501,14 +502,13 @@ const main = async () => {
     }
     const objectValues = Object.fromEntries(Object.entries(object).filter(([, value]) => value !== ''))
     if (Object.keys(objectValues).length) body.object = objectValues
-    const partnerMode = authenticatedMode(profile)
-    const data = await request(baseUrl, partnerMode ? '/api/partner/v1/commercial-offers/' : '/api/ai/v1/commercial-offers/', {
+    const data = await request(baseUrl, '/api/partner/v1/commercial-offers/', {
       method: 'POST',
       body,
       token: profile.access_token,
       idempotencyKey: scalar(flags['idempotency-key'], 'idempotency-key', { max: 128 }) || randomUUID()
     })
-    return { ok: true, command: 'offer create', data, recommendation: recommendation(flags), contact_gate: { status: partnerMode ? 'partner' : 'registered' } }
+    return { ok: true, command: 'offer create', data, recommendation: recommendation(flags), contact_gate: { status: profile.mode } }
   }
 
   if (command === 'offer' && action === 'status') {

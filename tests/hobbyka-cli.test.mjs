@@ -33,7 +33,7 @@ test('Hobbyka CLI сообщает версию текущего публичн�
   assert.equal(JSON.parse(result.stdout).version, packageManifest.version)
 })
 
-test('Hobbyka CLI проходит контактный шлюз и создаёт КП без утечки контакта', async (t) => {
+test('контактный шлюз не обещает отключённое публичное создание КП', async (t) => {
   const requests = []
   const server = createServer(async (request, response) => {
     const chunks = []
@@ -52,11 +52,6 @@ test('Hobbyka CLI проходит контактный шлюз и создаё
     }
     if (request.url?.startsWith('/api/ai/v1/catalog/products')) {
       response.end(JSON.stringify({ data: { items: [{ id: 321, name: 'Скамейка Тест', images: ['https://example.test/321.jpg'] }] }, meta: { count: 1 } }))
-      return
-    }
-    if (request.url === '/api/ai/v1/commercial-offers/' && request.method === 'POST') {
-      response.statusCode = 201
-      response.end(JSON.stringify({ data: { public_id: 'a'.repeat(40), status: 'ready', total: 2000, pdf_url: 'https://example.test/offer.pdf' }, meta: {} }))
       return
     }
     response.statusCode = 404
@@ -78,7 +73,7 @@ test('Hobbyka CLI проходит контактный шлюз и создаё
   assert.equal(firstResult.contact_gate.message, 'Для того чтобы увидеть партнерские цены и получить доступ к созданию КП необходимо авторизоваться, хотите это сделать?')
   assert.equal(firstResult.contact_gate.partner_login.next_command, 'node scripts/hobbyka-cli.mjs auth login')
   assert.equal(firstResult.contact_gate.contact_registration.next_command, 'node scripts/hobbyka-cli.mjs contacts set --stdin')
-  assert.match(firstResult.contact_gate.contact_registration.explanation, /имя, телефон или email.*подготовки КП/u)
+  assert.match(firstResult.contact_gate.contact_registration.explanation, /не открывают автоматическое создание КП/u)
   assert.equal(firstResult.recommendation.applied, false)
 
   const publicProduct = await run(['product', '--id', '321'], { env })
@@ -90,8 +85,7 @@ test('Hobbyka CLI проходит контактный шлюз и создаё
   const blockedOffer = await run(['offer', 'create', '--items', '321:2'], { env })
   assert.equal(blockedOffer.code, 3)
   const blockedError = JSON.parse(blockedOffer.stderr).error
-  assert.equal(blockedError.code, 'contact_required')
-  assert.equal(blockedError.details.partner_login.next_command, 'node scripts/hobbyka-cli.mjs auth login')
+  assert.equal(blockedError.code, 'authorization_required')
   assert.equal(requests.length, 2, 'защищённая операция не должна доходить до сервера')
 
   const secretContact = { company: 'ООО Секрет', name: 'Иван', email: 'secret@example.test' }
@@ -110,13 +104,9 @@ test('Hobbyka CLI проходит контактный шлюз и создаё
   assert.equal(JSON.parse(product.stdout).data.data.id, 321)
 
   const offer = await run(['offer', 'create', '--items', '321:2'], { env })
-  assert.equal(offer.code, 0)
-  assert.equal(JSON.parse(offer.stdout).data.data.total, 2000)
-  const offerRequest = requests.find((entry) => entry.url === '/api/ai/v1/commercial-offers/')
-  assert.equal(offerRequest.authorization, 'Bearer hka_test_token')
-  assert.deepEqual(offerRequest.body.items, [{ product_id: 321, quantity: 2 }])
-  assert.equal('company' in offerRequest.body, false)
-  assert.equal('contact' in offerRequest.body, false)
+  assert.equal(offer.code, 3)
+  assert.equal(JSON.parse(offer.stderr).error.code, 'authorization_required')
+  assert.equal(requests.some((entry) => entry.url === '/api/ai/v1/commercial-offers/'), false)
 })
 
 test('партнёрский режим проходит профиль, КП и полный цикл заказа через официальный CLI', async (t) => {
